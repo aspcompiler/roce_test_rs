@@ -59,3 +59,17 @@ A Completion Queue is an event notification mechanism. When RDMA operations (sen
 
 ### Queue Pair (QP)
 A Queue Pair is the endpoint for RDMA communication. It consists of a Send Queue and a Receive Queue, and is associated with a Completion Queue for notifications. To communicate with a remote peer, you establish a Queue Pair connection between them. Each QP has a state machine (RESET → INIT → RTR → RTS) that must be transitioned through to become operational. In this project, we create a Reliable Connection (RC) Queue Pair, which guarantees ordered, error-checked delivery.
+
+## Loopback Test
+
+The program includes a loopback test that demonstrates local RDMA operations on a single Queue Pair:
+
+1. **Setup**: Creates a QP with GID index set to 1 (required for loopback to function correctly)
+2. **State Transitions**: The QP automatically transitions through RESET → INIT → RTR → RTS states via the `handshake()` call
+3. **Memory Setup**: Allocates and registers 16 bytes of memory (8 bytes for receive, 8 bytes for send)
+4. **Send/Receive**: 
+   - Posts a Receive Work Request to listen for incoming data
+   - Posts a Send Work Request to transmit test data (0x42) to itself
+5. **Verification**: Polls the Completion Queue until both operations complete and verifies the data was correctly looped back
+
+This test validates that the RDMA infrastructure is working correctly before attempting remote operations.
