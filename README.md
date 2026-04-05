@@ -42,7 +42,36 @@ ibv_devinfo
 ```
 ## Run Cargo Program
 
+### Loopback Mode (Default)
+```bash
 cargo run
+```
+Runs a self-contained loopback test on a single Queue Pair.
+
+### Server Mode
+```bash
+cargo run -- server 0.0.0.0
+```
+Starts a server listening on the specified IP address (0.0.0.0 for all interfaces, 127.0.0.1 for localhost).
+
+### Client Mode
+```bash
+cargo run -- client <SERVER_IP>
+```
+Connects to a server at the specified IP and runs an echo test.
+
+### Two-Machine Testing Example
+**Machine 1 (Server):**
+```bash
+cargo build --release
+./target/release/roce_test server 0.0.0.0
+```
+
+**Machine 2 (Client):**
+```bash
+./target/release/roce_test client <SERVER_IP>
+```
+Replace `<SERVER_IP>` with the actual server IP address.
 
 ## RDMA Concepts
 
@@ -60,7 +89,9 @@ A Completion Queue is an event notification mechanism. When RDMA operations (sen
 ### Queue Pair (QP)
 A Queue Pair is the endpoint for RDMA communication. It consists of a Send Queue and a Receive Queue, and is associated with a Completion Queue for notifications. To communicate with a remote peer, you establish a Queue Pair connection between them. Each QP has a state machine (RESET → INIT → RTR → RTS) that must be transitioned through to become operational. In this project, we create a Reliable Connection (RC) Queue Pair, which guarantees ordered, error-checked delivery.
 
-## Loopback Test
+## Test Modes
+
+### Loopback Test (Default)
 
 The program includes a loopback test that demonstrates local RDMA operations on a single Queue Pair:
 
@@ -73,3 +104,31 @@ The program includes a loopback test that demonstrates local RDMA operations on 
 5. **Verification**: Polls the Completion Queue until both operations complete and verifies the data was correctly looped back
 
 This test validates that the RDMA infrastructure is working correctly before attempting remote operations.
+
+### Client-Server Mode
+
+For testing RDMA communication between two machines:
+
+**Server Side:**
+1. Auto-discovers RDMA device using RoCEv2 GID (queries network interface mapping)
+2. Creates RDMA resources (Protection Domain, Completion Queue, Queue Pair)
+3. Listens on TCP port 7471 for client connection
+4. Exchanges RDMA endpoint information with client over TCP
+5. Establishes RDMA connection via `handshake()` with remote endpoint
+6. Posts receive request and waits for data from client
+7. Echoes received data back to client
+
+**Client Side:**
+1. Auto-discovers RDMA device using RoCEv2 GID
+2. Creates RDMA resources
+3. Connects to server via TCP
+4. Exchanges RDMA endpoint information
+5. Establishes RDMA connection with server
+6. Sends test data (0x42) to server
+7. Receives echo and verifies the data matches
+
+**Key Features:**
+- **Automatic Device Discovery**: Queries RDMA device GID table and selects first RoCEv2 GID with valid network interface
+- **TCP Handshake**: Exchanges QueuePairEndpoint structures (serialized with bincode) before establishing RDMA connection
+- **Single Echo Round**: Client sends once, server echoes once, then both exit (simple verification pattern)
+- **Cross-Machine Support**: Works on local loopback (127.0.0.1) or across network interfaces
