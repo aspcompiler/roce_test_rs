@@ -18,12 +18,18 @@ enum Cli {
     Server {
         /// IP address to listen on (e.g., 0.0.0.0 or 127.0.0.1)
         listen_ip: String,
+        /// GID index to use (optional, will auto-detect if not specified)
+        #[arg(long)]
+        gid_index: Option<u32>,
     },
 
     /// Run as client, connecting to server
     Client {
         /// Server IP address to connect to
         server_ip: String,
+        /// GID index to use (optional, will auto-detect if not specified)
+        #[arg(long)]
+        gid_index: Option<u32>,
     },
 }
 
@@ -32,8 +38,8 @@ fn main() {
 
     let result = match cli {
         Cli::Loopback => run_loopback(),
-        Cli::Server { listen_ip } => run_server(&listen_ip),
-        Cli::Client { server_ip } => run_client(&server_ip),
+        Cli::Server { listen_ip, gid_index } => run_server(&listen_ip, gid_index),
+        Cli::Client { server_ip, gid_index } => run_client(&server_ip, gid_index),
     };
 
     if let Err(e) = result {
@@ -253,11 +259,16 @@ fn exchange_endpoints(
     Ok(remote_endpoint)
 }
 
-fn run_server(listen_ip: &str) -> Result<(), Box<dyn Error>> {
+fn run_server(listen_ip: &str, gid_index_override: Option<u32>) -> Result<(), Box<dyn Error>> {
     println!("Starting server mode...");
 
     // Setup RDMA resources
-    let (_device_name, gid_index) = find_rdma_device_auto()?;
+    let (_device_name, gid_index) = if let Some(idx) = gid_index_override {
+        println!("Using explicit GID index: {}", idx);
+        ("rxe0".to_string(), idx)
+    } else {
+        find_rdma_device_auto()?
+    };
 
     // Discover and open device
     let devices = ibverbs::devices()?;
@@ -351,11 +362,16 @@ fn run_server(listen_ip: &str) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn run_client(server_ip: &str) -> Result<(), Box<dyn Error>> {
+fn run_client(server_ip: &str, gid_index_override: Option<u32>) -> Result<(), Box<dyn Error>> {
     println!("Starting client mode...");
 
     // Setup RDMA resources
-    let (_device_name, gid_index) = find_rdma_device_auto()?;
+    let (_device_name, gid_index) = if let Some(idx) = gid_index_override {
+        println!("Using explicit GID index: {}", idx);
+        ("rxe0".to_string(), idx)
+    } else {
+        find_rdma_device_auto()?
+    };
 
     // Discover and open device
     let devices = ibverbs::devices()?;
