@@ -227,7 +227,7 @@ fn setup_rdma_resources(
 }
 
 fn exchange_endpoints(
-    mut stream: &TcpStream,
+    stream: &mut TcpStream,
     local_endpoint: ibverbs::QueuePairEndpoint,
     _is_server: bool,
 ) -> Result<ibverbs::QueuePairEndpoint, Box<dyn Error>> {
@@ -236,14 +236,17 @@ fn exchange_endpoints(
     // Send endpoint (with length prefix)
     stream.write_all(&(encoded.len() as u64).to_le_bytes())?;
     stream.write_all(&encoded)?;
+    stream.flush()?;
 
     // Receive endpoint (read length first, then data)
     let mut len_bytes = [0u8; 8];
-    stream.read_exact(&mut len_bytes)?;
+    stream.read_exact(&mut len_bytes)
+        .map_err(|e| format!("Failed to read endpoint length: {}", e))?;
     let len = u64::from_le_bytes(len_bytes) as usize;
 
     let mut remote_encoded = vec![0u8; len];
-    stream.read_exact(&mut remote_encoded)?;
+    stream.read_exact(&mut remote_encoded)
+        .map_err(|e| format!("Failed to read endpoint data (expected {} bytes): {}", len, e))?;
 
     let remote_endpoint: ibverbs::QueuePairEndpoint = bincode::deserialize(&remote_encoded)?;
 
@@ -271,7 +274,7 @@ fn run_server(listen_ip: &str) -> Result<(), Box<dyn Error>> {
     let listener = TcpListener::bind(&addr)?;
     println!("Server listening on {}", addr);
 
-    let stream = listener.accept()?.0;
+    let mut stream = listener.accept()?.0;
     let peer_addr = stream.peer_addr()?;
     println!("Client connected from {}", peer_addr);
 
@@ -282,7 +285,7 @@ fn run_server(listen_ip: &str) -> Result<(), Box<dyn Error>> {
     let local_endpoint = qp_builder_built.endpoint();
 
     // Exchange endpoints
-    let remote_endpoint = exchange_endpoints(&stream, local_endpoint, true)?;
+    let remote_endpoint = exchange_endpoints(&mut stream, local_endpoint, true)?;
     println!("Exchanged endpoints successfully");
 
     // Now perform handshake with remote endpoint
@@ -363,7 +366,7 @@ fn run_client(server_ip: &str) -> Result<(), Box<dyn Error>> {
 
     // Connect to server
     let addr = format!("{}:{}", server_ip, TCP_PORT);
-    let stream = TcpStream::connect(&addr)?;
+    let mut stream = TcpStream::connect(&addr)?;
     println!("Connected to server {}", addr);
 
     // Get local endpoint for initial QP
@@ -373,7 +376,7 @@ fn run_client(server_ip: &str) -> Result<(), Box<dyn Error>> {
     let local_endpoint = qp_builder_built.endpoint();
 
     // Exchange endpoints
-    let remote_endpoint = exchange_endpoints(&stream, local_endpoint, false)?;
+    let remote_endpoint = exchange_endpoints(&mut stream, local_endpoint, false)?;
     println!("Exchanged endpoints successfully");
 
     // Now perform handshake with remote endpoint
