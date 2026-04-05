@@ -22,6 +22,15 @@ sudo apt install -y clang libclang-dev
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ```
 
+## AWS VPC Configuration (if applicable)
+
+If testing in an AWS VPC, update the Security Group to allow all traffic between instances:
+1. Go to AWS EC2 → Security Groups
+2. Select the security group used by your instances
+3. Add an inbound rule: **Type: All traffic, Source: Security group ID (same as current)**
+
+This allows hosts within the same VPC to communicate over TCP, UDP, and ICMP. RoCE uses UDP for transport, so this is essential for inter-node communication.
+
 ## Load the Soft-RoCE Kernel Module
 
 ```
@@ -54,24 +63,45 @@ cargo run -- server 0.0.0.0
 ```
 Starts a server listening on the specified IP address (0.0.0.0 for all interfaces, 127.0.0.1 for localhost).
 
+Optional: Use `--gid-index` to specify a GID index (useful for multi-machine setups):
+```bash
+cargo run -- server 0.0.0.0 --gid-index 1
+```
+
 ### Client Mode
 ```bash
 cargo run -- client <SERVER_IP>
 ```
 Connects to a server at the specified IP and runs an echo test.
 
+Optional: Use `--gid-index` to specify a GID index (must match the server's GID index for multi-machine setups):
+```bash
+cargo run -- client <SERVER_IP> --gid-index 1
+```
+
 ### Two-Machine Testing Example
+
+For multi-machine setups, you need to ensure both machines use the same GID index. First, check available GIDs on each machine:
+```bash
+ibv_devinfo -d rxe0 -v
+```
+Look for the GID table entries and find matching GIDs on both machines (typically GID[1] if IPv4-mapped).
+
 **Machine 1 (Server):**
 ```bash
 cargo build --release
-./target/release/roce_test server 0.0.0.0
+./target/release/roce_test server 0.0.0.0 --gid-index 1
 ```
 
 **Machine 2 (Client):**
 ```bash
-./target/release/roce_test client <SERVER_IP>
+./target/release/roce_test client <SERVER_IP> --gid-index 1
 ```
-Replace `<SERVER_IP>` with the actual server IP address.
+Replace `<SERVER_IP>` with the actual server IP address and use the same `--gid-index` value as the server.
+
+**Important**: 
+- Ensure UDP traffic is allowed between the machines in your firewall/security groups, as RoCE uses UDP for transport
+- In AWS VPC, configure the Security Group to allow all traffic to the same security group (see AWS VPC Configuration section above)
 
 ## RDMA Concepts
 
@@ -128,7 +158,8 @@ For testing RDMA communication between two machines:
 7. Receives echo and verifies the data matches
 
 **Key Features:**
-- **Automatic Device Discovery**: Queries RDMA device GID table and selects first RoCEv2 GID with valid network interface
+- **Automatic Device Discovery**: Queries RDMA device GID table and selects first RoCEv2 GID with valid network interface (can be overridden with `--gid-index`)
 - **TCP Handshake**: Exchanges QueuePairEndpoint structures (serialized with bincode) before establishing RDMA connection
 - **Single Echo Round**: Client sends once, server echoes once, then both exit (simple verification pattern)
 - **Cross-Machine Support**: Works on local loopback (127.0.0.1) or across network interfaces
+- **GID Index Control**: For multi-machine setups across different subnets, use explicit `--gid-index` to select matching GIDs on both sides
