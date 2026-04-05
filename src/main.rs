@@ -1,5 +1,5 @@
-use clap::{Parser, Subcommand};
-use ibverbs::{self, ibv_gid_type};
+use clap::Parser;
+use ibverbs;
 use nix::net::if_::if_indextoname;
 use std::error::Error;
 use std::io::{Read, Write};
@@ -164,7 +164,7 @@ fn run_loopback() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn find_rdma_device_auto() -> Result<(ibverbs::Device, ibverbs::Context, u32), Box<dyn Error>> {
+fn find_rdma_device_auto() -> Result<(String, u32), Box<dyn Error>> {
     let devices = ibverbs::devices()?;
 
     for device in devices.iter() {
@@ -173,20 +173,23 @@ fn find_rdma_device_auto() -> Result<(ibverbs::Device, ibverbs::Context, u32), B
 
         // Find first RoCEv2 GID with valid interface
         for entry in gid_table {
-            if entry.gid_type == ibv_gid_type::IBV_GID_TYPE_ROCE_V2
+            if entry.gid_type == 2 // IBV_GID_TYPE_ROCE_V2
                 && entry.ndev_ifindex != 0
-                && !entry.gid.is_zero()
+                && entry.gid != ibverbs::Gid::default()
             {
                 // Log the network interface mapping
+                let device_name = device
+                    .name()
+                    .ok_or("Device name not available")?
+                    .to_str()
+                    .map_err(|_| "Device name is not valid UTF-8")?
+                    .to_string();
+
                 if let Some(if_name) = get_interface_name(entry.ndev_ifindex) {
-                    println!(
-                        "Using RDMA device {} on interface {}",
-                        device.name()?.to_str()?,
-                        if_name
-                    );
+                    println!("Using RDMA device {} on interface {}", device_name, if_name);
                 }
 
-                return Ok((device, context, entry.gid_index));
+                return Ok((device_name, entry.gid_index));
             }
         }
     }
@@ -204,15 +207,13 @@ fn get_interface_name(ifindex: u32) -> Option<String> {
 }
 
 fn setup_rdma_resources(
-    device: &ibverbs::Device,
     context: &ibverbs::Context,
     gid_index: u32,
 ) -> Result<
     (
-        ibverbs::ProtectionDomain,
-        ibverbs::CompletionQueue,
+        ibverbs::ProtectionDomain<'_>,
+        ibverbs::CompletionQueue<'_>,
         u32,
-        ibverbs::QueuePair,
     ),
     Box<dyn Error>,
 > {
@@ -222,25 +223,13 @@ fn setup_rdma_resources(
     // Create a Completion Queue (CQ)
     let cq = context.create_cq(16, 0)?;
 
-    // Create a Queue Pair (QP)
-    let mut qp_builder = pd.create_qp(&cq, &cq, ibverbs::ibv_qp_type::IBV_QPT_RC);
-
-    qp_builder.set_gid_index(gid_index);
-
-    let qp_builder_built = qp_builder.build()?;
-
-    let endpoint = qp_builder_built.endpoint();
-    let gid_index_result = endpoint.gid.ok_or("No GID in endpoint")?.gid_index;
-
-    let qp = qp_builder_built.handshake(endpoint)?;
-
-    Ok((pd, cq, gid_index_result, qp))
+    Ok((pd, cq, gid_index))
 }
 
 fn exchange_endpoints(
     mut stream: &TcpStream,
     local_endpoint: ibverbs::QueuePairEndpoint,
-    is_server: bool,
+    _is_server: bool,
 ) -> Result<ibverbs::QueuePairEndpoint, Box<dyn Error>> {
     let encoded = bincode::serialize(&local_endpoint)?;
 
@@ -265,8 +254,17 @@ fn run_server(listen_ip: &str) -> Result<(), Box<dyn Error>> {
     println!("Starting server mode...");
 
     // Setup RDMA resources
-    let (device, context, gid_index) = find_rdma_device_auto()?;
-    let (pd, cq, actual_gid_index, _qp) = setup_rdma_resources(&device, &context, gid_index)?;
+    let (_device_name, gid_index) = find_rdma_device_auto()?;
+
+    // Discover and open device
+    let devices = ibverbs::devices()?;
+    let device = devices
+        .iter()
+        .find(|d| d.name().and_then(|name| name.to_str().ok()) == Some("rxe0"))
+        .ok_or("Device rxe0 not found")?;
+    let context = device.open()?;
+
+    let (pd, cq, actual_gid_index) = setup_rdma_resources(&context, gid_index)?;
 
     // Setup TCP listener
     let addr = format!("{}:{}", listen_ip, TCP_PORT);
@@ -301,7 +299,7 @@ fn run_server(listen_ip: &str) -> Result<(), Box<dyn Error>> {
     println!("Receive Work Request posted");
 
     // Poll for completion
-    let mut completions = [ibverbs::ibv_wc::default(); 16];
+    let mut completions: [ibverbs::ibv_wc; 16] = [ibverbs::ibv_wc::default(); 16];
     let mut received = false;
 
     while !received {
@@ -351,8 +349,17 @@ fn run_client(server_ip: &str) -> Result<(), Box<dyn Error>> {
     println!("Starting client mode...");
 
     // Setup RDMA resources
-    let (device, context, gid_index) = find_rdma_device_auto()?;
-    let (pd, cq, actual_gid_index, _qp) = setup_rdma_resources(&device, &context, gid_index)?;
+    let (_device_name, gid_index) = find_rdma_device_auto()?;
+
+    // Discover and open device
+    let devices = ibverbs::devices()?;
+    let device = devices
+        .iter()
+        .find(|d| d.name().and_then(|name| name.to_str().ok()) == Some("rxe0"))
+        .ok_or("Device rxe0 not found")?;
+    let context = device.open()?;
+
+    let (pd, cq, actual_gid_index) = setup_rdma_resources(&context, gid_index)?;
 
     // Connect to server
     let addr = format!("{}:{}", server_ip, TCP_PORT);
@@ -391,7 +398,7 @@ fn run_client(server_ip: &str) -> Result<(), Box<dyn Error>> {
     }
 
     // Poll for completions
-    let mut completions = [ibverbs::ibv_wc::default(); 16];
+    let mut completions: [ibverbs::ibv_wc; 16] = [ibverbs::ibv_wc::default(); 16];
     let mut sent = false;
     let mut received = false;
 
