@@ -315,14 +315,9 @@ fn run_server(listen_ip: &str, gid_index_override: Option<u32>) -> Result<(), Bo
 
     // Exchange endpoints
     let remote_endpoint = exchange_endpoints(&mut stream, local_endpoint, true)?;
-    println!("Exchanged endpoints successfully");
-    println!("Local endpoint: {:?}", local_endpoint);
-    println!("Remote endpoint: {:?}", remote_endpoint);
 
-    // Now perform handshake with remote endpoint
-    println!("Starting handshake...");
+    // Perform handshake with remote endpoint
     let mut qp = qp_builder_built.handshake(remote_endpoint)?;
-    println!("RDMA Queue Pair ready");
 
     // Send ready signal to client
     stream.write_all(b"READY")?;
@@ -330,39 +325,26 @@ fn run_server(listen_ip: &str, gid_index_override: Option<u32>) -> Result<(), Bo
 
     // Memory setup for server
     let mut mr = pd.allocate::<u8>(16)?;
-    println!("Server allocated memory: {:p}, size: 16 bytes", mr.as_ptr());
 
     // Post receive request
     unsafe {
         qp.post_receive(&mut mr, ..8, 2)?;
     }
-    println!("Receive Work Request posted for mr[0..8]");
 
-    // Poll for completion with timeout
+    // Poll for completion
     let mut completions: [ibverbs::ibv_wc; 16] = [ibverbs::ibv_wc::default(); 16];
     let mut received = false;
-    let start = std::time::Instant::now();
-    let timeout = std::time::Duration::from_secs(5);
 
     while !received {
         let completed = cq.poll(&mut completions[..])?;
 
         if completed.is_empty() {
-            if start.elapsed() > timeout {
-                println!("TIMEOUT: No receive completion after 5 seconds");
-                println!("Buffer still: mr[0..8] = {:?}", &mr[0..8]);
-                return Err("Receive timed out".into());
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
             continue;
         }
 
         for wr in completed {
-            println!("Got completion with wr_id: {}", wr.wr_id());
             if wr.wr_id() == 2 {
                 received = true;
-                println!("Received data from client");
-                println!("Receive buffer contents: mr[0..8] = {:?}", &mr[0..8]);
             }
         }
     }
@@ -370,12 +352,10 @@ fn run_server(listen_ip: &str, gid_index_override: Option<u32>) -> Result<(), Bo
     // Echo back the data
     // Client sent mr[9] (which is 0x42), it arrived at mr[1] in our receive buffer
     mr[9] = mr[1];
-    println!("Echoing data: read 0x{:02x} from receive buffer, will send back", mr[1]);
 
     unsafe {
         qp.post_send(&mut mr, 8.., 1)?;
     }
-    println!("Echoing data back");
 
     // Poll for send completion
     let mut sent = false;
@@ -431,33 +411,24 @@ fn run_client(server_ip: &str, gid_index_override: Option<u32>) -> Result<(), Bo
 
     // Exchange endpoints
     let remote_endpoint = exchange_endpoints(&mut stream, local_endpoint, false)?;
-    println!("Exchanged endpoints successfully");
-    println!("Local endpoint: {:?}", local_endpoint);
-    println!("Remote endpoint: {:?}", remote_endpoint);
 
-    // Now perform handshake with remote endpoint
-    println!("Starting handshake...");
+    // Perform handshake with remote endpoint
     let mut qp = qp_builder_built.handshake(remote_endpoint)?;
-    println!("RDMA Queue Pair ready");
 
     // Wait for server to be ready
     let mut ready_buf = [0u8; 5];
     stream.read_exact(&mut ready_buf)?;
-    println!("Server is ready");
 
     // Memory setup for client
     let mut mr = pd.allocate::<u8>(16)?;
-    println!("Client allocated memory: {:p}, size: 16 bytes", mr.as_ptr());
 
     // Write test data
     mr[9] = 0x42;
-    println!("Client sending mr[8..16] with mr[9] = 0x42");
 
     // Post send request
     unsafe {
         qp.post_send(&mut mr, 8.., 1)?;
     }
-    println!("Sent test data");
 
     // Post receive request for echo
     unsafe {
@@ -478,14 +449,8 @@ fn run_client(server_ip: &str, gid_index_override: Option<u32>) -> Result<(), Bo
 
         for wr in completed {
             match wr.wr_id() {
-                1 => {
-                    sent = true;
-                    println!("Send completed");
-                }
-                2 => {
-                    received = true;
-                    println!("Received echo from server");
-                }
+                1 => sent = true,
+                2 => received = true,
                 _ => {}
             }
         }
