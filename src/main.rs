@@ -235,28 +235,46 @@ fn setup_rdma_resources(
 fn exchange_endpoints(
     stream: &mut TcpStream,
     local_endpoint: ibverbs::QueuePairEndpoint,
-    _is_server: bool,
+    is_server: bool,
 ) -> Result<ibverbs::QueuePairEndpoint, Box<dyn Error>> {
     let encoded = bincode::serialize(&local_endpoint)?;
 
-    // Send endpoint (with length prefix)
-    stream.write_all(&(encoded.len() as u64).to_le_bytes())?;
-    stream.write_all(&encoded)?;
-    stream.flush()?;
+    if is_server {
+        // Server receives first, then sends (to ensure client is ready)
+        let mut len_bytes = [0u8; 8];
+        stream.read_exact(&mut len_bytes)
+            .map_err(|e| format!("Failed to read endpoint length: {}", e))?;
+        let len = u64::from_le_bytes(len_bytes) as usize;
 
-    // Receive endpoint (read length first, then data)
-    let mut len_bytes = [0u8; 8];
-    stream.read_exact(&mut len_bytes)
-        .map_err(|e| format!("Failed to read endpoint length: {}", e))?;
-    let len = u64::from_le_bytes(len_bytes) as usize;
+        let mut remote_encoded = vec![0u8; len];
+        stream.read_exact(&mut remote_encoded)
+            .map_err(|e| format!("Failed to read endpoint data (expected {} bytes): {}", len, e))?;
 
-    let mut remote_encoded = vec![0u8; len];
-    stream.read_exact(&mut remote_encoded)
-        .map_err(|e| format!("Failed to read endpoint data (expected {} bytes): {}", len, e))?;
+        // Now send our endpoint
+        stream.write_all(&(encoded.len() as u64).to_le_bytes())?;
+        stream.write_all(&encoded)?;
+        stream.flush()?;
 
-    let remote_endpoint: ibverbs::QueuePairEndpoint = bincode::deserialize(&remote_encoded)?;
+        let remote_endpoint: ibverbs::QueuePairEndpoint = bincode::deserialize(&remote_encoded)?;
+        Ok(remote_endpoint)
+    } else {
+        // Client sends first, then receives
+        stream.write_all(&(encoded.len() as u64).to_le_bytes())?;
+        stream.write_all(&encoded)?;
+        stream.flush()?;
 
-    Ok(remote_endpoint)
+        let mut len_bytes = [0u8; 8];
+        stream.read_exact(&mut len_bytes)
+            .map_err(|e| format!("Failed to read endpoint length: {}", e))?;
+        let len = u64::from_le_bytes(len_bytes) as usize;
+
+        let mut remote_encoded = vec![0u8; len];
+        stream.read_exact(&mut remote_encoded)
+            .map_err(|e| format!("Failed to read endpoint data (expected {} bytes): {}", len, e))?;
+
+        let remote_endpoint: ibverbs::QueuePairEndpoint = bincode::deserialize(&remote_encoded)?;
+        Ok(remote_endpoint)
+    }
 }
 
 fn run_server(listen_ip: &str, gid_index_override: Option<u32>) -> Result<(), Box<dyn Error>> {
@@ -306,6 +324,10 @@ fn run_server(listen_ip: &str, gid_index_override: Option<u32>) -> Result<(), Bo
     let mut qp = qp_builder_built.handshake(remote_endpoint)?;
     println!("RDMA Queue Pair ready");
 
+    // Send ready signal to client
+    stream.write_all(b"READY")?;
+    stream.flush()?;
+
     // Memory setup for server
     let mut mr = pd.allocate::<u8>(16)?;
     println!("Server allocated memory: {:p}, size: 16 bytes", mr.as_ptr());
@@ -315,9 +337,6 @@ fn run_server(listen_ip: &str, gid_index_override: Option<u32>) -> Result<(), Bo
         qp.post_receive(&mut mr, ..8, 2)?;
     }
     println!("Receive Work Request posted for mr[0..8]");
-
-    // Give the client time to connect and prepare
-    std::thread::sleep(std::time::Duration::from_millis(500));
 
     // Poll for completion
     let mut completions: [ibverbs::ibv_wc; 16] = [ibverbs::ibv_wc::default(); 16];
@@ -412,6 +431,11 @@ fn run_client(server_ip: &str, gid_index_override: Option<u32>) -> Result<(), Bo
     let mut qp = qp_builder_built.handshake(remote_endpoint)?;
     println!("RDMA Queue Pair ready");
 
+    // Wait for server to be ready
+    let mut ready_buf = [0u8; 5];
+    stream.read_exact(&mut ready_buf)?;
+    println!("Server is ready");
+
     // Memory setup for client
     let mut mr = pd.allocate::<u8>(16)?;
     println!("Client allocated memory: {:p}, size: 16 bytes", mr.as_ptr());
@@ -419,9 +443,6 @@ fn run_client(server_ip: &str, gid_index_override: Option<u32>) -> Result<(), Bo
     // Write test data
     mr[9] = 0x42;
     println!("Client sending mr[8..16] with mr[9] = 0x42");
-
-    // Give time for server to post receive
-    std::thread::sleep(std::time::Duration::from_millis(500));
 
     // Post send request
     unsafe {
