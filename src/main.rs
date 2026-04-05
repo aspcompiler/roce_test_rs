@@ -338,18 +338,27 @@ fn run_server(listen_ip: &str, gid_index_override: Option<u32>) -> Result<(), Bo
     }
     println!("Receive Work Request posted for mr[0..8]");
 
-    // Poll for completion
+    // Poll for completion with timeout
     let mut completions: [ibverbs::ibv_wc; 16] = [ibverbs::ibv_wc::default(); 16];
     let mut received = false;
+    let start = std::time::Instant::now();
+    let timeout = std::time::Duration::from_secs(5);
 
     while !received {
         let completed = cq.poll(&mut completions[..])?;
 
         if completed.is_empty() {
+            if start.elapsed() > timeout {
+                println!("TIMEOUT: No receive completion after 5 seconds");
+                println!("Buffer still: mr[0..8] = {:?}", &mr[0..8]);
+                return Err("Receive timed out".into());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
             continue;
         }
 
         for wr in completed {
+            println!("Got completion with wr_id: {}", wr.wr_id());
             if wr.wr_id() == 2 {
                 received = true;
                 println!("Received data from client");
