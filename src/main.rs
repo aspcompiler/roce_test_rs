@@ -308,12 +308,16 @@ fn run_server(listen_ip: &str, gid_index_override: Option<u32>) -> Result<(), Bo
 
     // Memory setup for server
     let mut mr = pd.allocate::<u8>(16)?;
+    println!("Server allocated memory: {:p}, size: 16 bytes", mr.as_ptr());
 
     // Post receive request
     unsafe {
         qp.post_receive(&mut mr, ..8, 2)?;
     }
-    println!("Receive Work Request posted");
+    println!("Receive Work Request posted for mr[0..8]");
+
+    // Give the client time to connect and prepare
+    std::thread::sleep(std::time::Duration::from_millis(500));
 
     // Poll for completion
     let mut completions: [ibverbs::ibv_wc; 16] = [ibverbs::ibv_wc::default(); 16];
@@ -410,9 +414,14 @@ fn run_client(server_ip: &str, gid_index_override: Option<u32>) -> Result<(), Bo
 
     // Memory setup for client
     let mut mr = pd.allocate::<u8>(16)?;
+    println!("Client allocated memory: {:p}, size: 16 bytes", mr.as_ptr());
 
     // Write test data
     mr[9] = 0x42;
+    println!("Client sending mr[8..16] with mr[9] = 0x42");
+
+    // Give time for server to post receive
+    std::thread::sleep(std::time::Duration::from_millis(500));
 
     // Post send request
     unsafe {
