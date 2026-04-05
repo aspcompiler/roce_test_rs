@@ -1,5 +1,4 @@
 use clap::Parser;
-use ibverbs;
 use nix::net::if_::if_indextoname;
 use std::error::Error;
 use std::io::{Read, Write};
@@ -34,7 +33,7 @@ enum Cli {
 }
 
 fn main() {
-    let cli = Cli::try_parse().unwrap_or_else(|_| Cli::Loopback);
+    let cli = Cli::try_parse().unwrap_or(Cli::Loopback);
 
     let result = match cli {
         Cli::Loopback => run_loopback(),
