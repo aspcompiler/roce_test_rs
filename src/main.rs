@@ -330,12 +330,15 @@ fn run_server(listen_ip: &str, gid_index_override: Option<u32>) -> Result<(), Bo
             if wr.wr_id() == 2 {
                 received = true;
                 println!("Received data from client");
+                println!("Receive buffer contents: mr[0..8] = {:?}", &mr[0..8]);
             }
         }
     }
 
     // Echo back the data
+    // Client sent mr[9] (which is 0x42), it arrived at mr[1] in our receive buffer
     mr[9] = mr[1];
+    println!("Echoing data: read 0x{:02x} from receive buffer, will send back", mr[1]);
 
     unsafe {
         qp.post_send(&mut mr, 8.., 1)?;
