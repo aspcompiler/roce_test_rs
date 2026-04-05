@@ -287,8 +287,11 @@ fn run_server(listen_ip: &str) -> Result<(), Box<dyn Error>> {
     // Exchange endpoints
     let remote_endpoint = exchange_endpoints(&mut stream, local_endpoint, true)?;
     println!("Exchanged endpoints successfully");
+    println!("Local endpoint: {:?}", local_endpoint);
+    println!("Remote endpoint: {:?}", remote_endpoint);
 
     // Now perform handshake with remote endpoint
+    println!("Starting handshake...");
     let mut qp = qp_builder_built.handshake(remote_endpoint)?;
     println!("RDMA Queue Pair ready");
 
@@ -378,8 +381,11 @@ fn run_client(server_ip: &str) -> Result<(), Box<dyn Error>> {
     // Exchange endpoints
     let remote_endpoint = exchange_endpoints(&mut stream, local_endpoint, false)?;
     println!("Exchanged endpoints successfully");
+    println!("Local endpoint: {:?}", local_endpoint);
+    println!("Remote endpoint: {:?}", remote_endpoint);
 
     // Now perform handshake with remote endpoint
+    println!("Starting handshake...");
     let mut qp = qp_builder_built.handshake(remote_endpoint)?;
     println!("RDMA Queue Pair ready");
 
